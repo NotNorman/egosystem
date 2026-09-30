@@ -1,0 +1,6 @@
+# Node.js backend
+node_modules/
+.env
+
+# Arduino secrets (if there are any local ones)
+**/secrets.h
