@@ -3,7 +3,7 @@ const router = express.Router();
 const pool = require('../db'); // Import your database connection
 
 // Adding funds
-app.post('/api/wallet/add', async (req, res) => {
+router.post('/api/wallet/add', async (req, res) => {
     const { userId, amountToAdd } = req.body;
     
     // Grab a dedicated client connection for this transaction
@@ -41,8 +41,9 @@ app.post('/api/wallet/add', async (req, res) => {
         client.release();
     }
 });
+
 // Purchasing products
-app.post('/api/wallet/purchase', async (req, res) => {
+router.post('/api/wallet/purchase', async (req, res) => {
     const { userId, baseCost, itemName } = req.body;
     const taxRate = parseFloat(process.env.TAX_RATE || 0.13); // Pull from .env
     
