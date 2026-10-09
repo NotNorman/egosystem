@@ -5,6 +5,7 @@
 #include <HTTPClient.h>
 #include <arduino_secrets.h>
 #include <ArduinoJson.h>
+#include <Arduino.h>
 
 #include "logo.h"
 #include "Rockwell20.h"
@@ -13,7 +14,11 @@
 TFT_eSPI tft = TFT_eSPI(); 
 
 #define TFT_BL_PIN 7 
-#define RADAR_OUT_PIN 9
+
+// --- RADAR PINS & SERIAL ---
+#define RADAR_RX_PIN 9 
+#define RADAR_TX_PIN 8 
+HardwareSerial RadarSerial(0); 
 
 #define SDA_PIN 4
 #define SCL_PIN 5
@@ -21,6 +26,8 @@ TFT_eSPI tft = TFT_eSPI();
 #define PN532_RESET 3
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 
+// --- BUZZER PIN ---
+#define BUZZER_PIN 10 // Replaced the MP3 UART with a simple buzzer pin
 
 const uint16_t EF_PURPLE = 0x480E;
 const uint16_t EF_GREEN  = 0x07E0; 
@@ -31,18 +38,67 @@ bool isScreenOn = false;
 // --- STATE MANAGEMENT VARIABLES ---
 bool isShowingMessage = false;
 unsigned long messageStartTime = 0;
-const unsigned long DISPLAY_DURATION = 2500; // 2.5 seconds
-// Add a global tracking variable for rate-limiting
+const unsigned long DISPLAY_DURATION = 2500; 
 unsigned long lastScanAttempt = 0;
-const unsigned long SCAN_INTERVAL = 150; // Wait 150ms between scans
+const unsigned long SCAN_INTERVAL = 150; 
 
-// UID Tracking for debounce / hold prevention
+// --- TRACKING VARIABLES ---
+unsigned long lastRadarDetection = 0;
+const unsigned long RADAR_TIMEOUT = 5000; 
+bool personDetected = false;
+int currentPeopleCount = 0; 
+int authorizedUsers = 0;    
+
 String lastUidStr = "";
+
+// --- NON-BLOCKING RADAR PARSER ---
+void updateRadar() {
+  static uint8_t buf[30];
+  static int idx = 0;
+  
+  while (RadarSerial.available()) {
+    uint8_t c = RadarSerial.read();
+    
+    if (idx == 0 && c != 0xAA) continue;
+    if (idx == 1 && c != 0xFF) { idx = 0; continue; }
+    if (idx == 2 && c != 0x03) { idx = 0; continue; }
+    if (idx == 3 && c != 0x00) { idx = 0; continue; }
+    
+    buf[idx] = c;
+    idx++;
+    
+    if (idx == 30) {
+      if (buf[28] == 0x55 && buf[29] == 0xCC) {
+        bool t1Active = (buf[6] != 0 || buf[7] != 0);
+        bool t2Active = (buf[14] != 0 || buf[15] != 0);
+        bool t3Active = (buf[22] != 0 || buf[23] != 0);
+        
+        int count = 0;
+        if (t1Active) count++;
+        if (t2Active) count++;
+        if (t3Active) count++;
+        
+        currentPeopleCount = count;
+
+        if (currentPeopleCount > 0) {
+          lastRadarDetection = millis(); 
+        }
+      }
+      idx = 0; 
+    }
+  }
+
+  if (millis() - lastRadarDetection < RADAR_TIMEOUT) {
+    personDetected = true;
+  } else {
+    personDetected = false;
+    currentPeopleCount = 0; 
+  }
+}
 
 // --- REUSABLE SCREEN STATE FUNCTION ---
 void renderDisplay(String topText, String bottomText, int mode) {
   tft.fillScreen(EF_PURPLE);
-  
   tft.pushImage(35, 40, 170, 200, mylogo);
 
   if (mode == 1) {
@@ -94,6 +150,26 @@ JsonDocument sendApiRequest(String endpoint, String jsonPayload) {
   return doc;
 }
 
+// --- SIMPLE BUZZER NOTIFICATIONS ---
+void playSound(int type) {
+  if (type == 1) { 
+    // DENIED: Low, ugly buzz
+    tone(BUZZER_PIN, 150, 400); 
+  } 
+  else if (type == 2) { 
+    // ALARM: High-Low siren
+    tone(BUZZER_PIN, 1200, 200);
+    delay(200); // Small blocking delay is okay for an active alarm state
+    tone(BUZZER_PIN, 800, 200);
+  }
+  else if (type == 3) {
+    // SUCCESS: Happy double-chirp
+    tone(BUZZER_PIN, 1200, 100);
+    delay(120);
+    tone(BUZZER_PIN, 1600, 150);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -103,8 +179,14 @@ void setup() {
     delay(500);
   }
 
+  // Initialize Buzzer
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  RadarSerial.begin(256000, SERIAL_8N1, RADAR_RX_PIN, RADAR_TX_PIN);
+  delay(100); 
+
   pinMode(TFT_BL_PIN, OUTPUT);
-  pinMode(RADAR_OUT_PIN, INPUT);
   digitalWrite(TFT_BL_PIN, LOW); 
 
   tft.init();
@@ -114,33 +196,49 @@ void setup() {
 
   Wire.begin(SDA_PIN, SCL_PIN);
   nfc.begin();
-  
 }
 
 void loop() {
-  // --- 1. RADAR LOGIC ---
-  bool personDetected = digitalRead(RADAR_OUT_PIN);
+  updateRadar();
 
+  // --- SCREEN & AUTO-CHECKOUT LOGIC ---
   if (personDetected && !isScreenOn) {
     digitalWrite(TFT_BL_PIN, HIGH);
     isScreenOn = true;
-  } else if (!personDetected && isScreenOn) {
+  } 
+  else if (!personDetected && isScreenOn) {
     digitalWrite(TFT_BL_PIN, LOW);
     isScreenOn = false;
+    
+    // THE RESET & AUTO-CHECKOUT
+    if (authorizedUsers > 0) {
+      Serial.println("Room empty. Sending auto-checkout request...");
+      String jsonPayload = "{\"device_id\":\"Ego Fitness Check-in\", \"action\":\"checkout_all\"}";
+      sendApiRequest("/api/checkout", jsonPayload);
+      
+      authorizedUsers = 0; 
+    }
   }
 
-  // --- 3. NFC SCAN & DYNAMIC SCREEN LOGIC ---
-  if (isScreenOn) {
+  // --- THE TAILGATING ALARM ---
+  if (personDetected && authorizedUsers > 0 && currentPeopleCount > authorizedUsers) {
+    static unsigned long lastAlarmTime = 0;
     
-    // Check if our 2.5-second message timer has expired
+    if (millis() - lastAlarmTime > 2000) { 
+      Serial.println("TAILGATING DETECTED: More bodies than taps!");
+      playSound(2); // Play siren tone
+      lastAlarmTime = millis();
+    }
+  }
+
+  // --- NFC SCAN & DYNAMIC SCREEN LOGIC ---
+  if (isScreenOn) {
     if (isShowingMessage && (millis() - messageStartTime >= DISPLAY_DURATION)) {
       renderDisplay("Ego Fitness", "TAP TO SIGN IN", 0);
       isShowingMessage = false;
-      lastUidStr = ""; // Clear memory so the same card can be scanned again later if needed
+      lastUidStr = ""; 
     }
 
-    // RATE-LIMITED SCAN: Runs constantly when screen is on, 
-    // even while showing a message, so the next person can tap immediately!
     if (millis() - lastScanAttempt >= SCAN_INTERVAL) {
       lastScanAttempt = millis();
       
@@ -151,7 +249,6 @@ void loop() {
       success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 50);
 
       if (success) {
-        // Convert raw bytes to a clean Hex String
         String nfcUidStr = "";
         for (uint8_t i = 0; i < uidLength; i++) {
           if (uid[i] < 0x10) nfcUidStr += "0";
@@ -159,30 +256,20 @@ void loop() {
         }
         nfcUidStr.toUpperCase();
 
-        // Check if this is the exact same card being held down continuously
-        if (nfcUidStr == lastUidStr) {
-          return; // Ignore this read, it's just a hold
-        }
+        if (nfcUidStr == lastUidStr) return; 
 
-        // A NEW card has been tapped!
         lastUidStr = nfcUidStr;
 
-        // construct the payload
         String jsonPayload = "{\"nfc_uid\":\"" + nfcUidStr + "\", \"device_id\":\"Ego Fitness Check-in\"}";
-        
-        // 2. Send the request using your helper
         JsonDocument doc = sendApiRequest("/api/scan", jsonPayload);
 
-        // 3. Extract the variables
         bool isAuthorized = false;
         String userName = "";
         String denyReason = "";
 
-        // Check for the error status you defined in the helper
         if (doc["status"] == "error") {
           denyReason = "Network Offline";
         } else {
-          // The pipe | false acts as a fallback if "authorized" is missing
           isAuthorized = doc["authorized"] | false; 
           
           if (isAuthorized) {
@@ -192,15 +279,16 @@ void loop() {
           }
         }
 
-        // 4. Update the screen
         if (isAuthorized) {
+          authorizedUsers++; 
+          Serial.println("Authorized! Current allowed users: " + String(authorizedUsers));
+          playSound(3); // Happy beep!
           renderDisplay("WELCOME!", userName, 1);
         } else {
+          playSound(1); // Angry buzz
           renderDisplay("DENIED", denyReason, 2);
         }
 
-        // Refresh the message display window for the new user 
-        // (this restarts the 2.5s countdown fresh for whoever just tapped)
         messageStartTime = millis();
         isShowingMessage = true;
       }
