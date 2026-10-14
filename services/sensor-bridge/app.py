@@ -206,10 +206,10 @@ def start_workout():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Insert the workout and instantly ask PostgreSQL for the generated exercise_id
+    # Insert the workout, tag it as rowing, and ask PostgreSQL for the generated exercise_id
     cursor.execute("""
-        INSERT INTO exercise_data (nfc_uid) 
-        VALUES (%s) 
+        INSERT INTO exercise_data (nfc_uid, exercise_type) 
+        VALUES (%s, 'rowing') 
         RETURNING exercise_id;
     """, (nfc_uid,))
     

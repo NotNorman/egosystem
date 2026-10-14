@@ -3,6 +3,7 @@ const router = express.Router();
 // Assuming you are using the 'pg' library for PostgreSQL
 const pool = require('../db'); 
 
+// --- SCAN & TAP-IN ROUTE ---
 router.post('/api/scan', async (req, res) => {
   const { nfc_uid, device_id } = req.body;
 
@@ -61,20 +62,54 @@ router.post('/api/scan', async (req, res) => {
       }
     }
 
-    // 3. Log the attempt into your tap_logs table
+    // 3. Log the attempt into your tap_logs table (ALWAYS happens for both success and denied)
     const logQuery = `
       INSERT INTO tap_logs (nfc_uid, device_id, access_granted, denied_reason)
       VALUES ($1, $2, $3, $4)
     `;
-    // If ESP32 didn't send a device_id, default to 'MAIN_DOOR'
-    await client.query(logQuery, [nfc_uid, device_id || 'Ego Fitness Check-in', access_granted, denied_reason]);
+    // If ESP32 didn't send a device_id, default to 'No Device ID Provided'
+    await client.query(logQuery, [nfc_uid, device_id || 'No Device ID Provided', access_granted, denied_reason]);
 
-    // Commit the transaction to save the log
+    // 4. If access is granted, ALSO start an active exercise session
+    if (access_granted) {
+      // First, forcefully close any "stuck" active sessions for this specific user
+      const cleanupQuery = `
+        UPDATE exercise_data 
+        SET end_time = CURRENT_TIMESTAMP, status = 'forced_closed' 
+        WHERE nfc_uid = $1 AND status = 'active'
+      `;
+      await client.query(cleanupQuery, [nfc_uid]);
+
+      // Second, determine the exercise type based on the ESP32's device_id
+      let exerciseType = 'general'; // A safe fallback
+      if (device_id === 'Ego Fitness Check-in') {
+        exerciseType = 'fitness';
+      } else if (device_id === 'Rowing Machine') {
+        exerciseType = 'rowing';
+      }
+
+      // Third, start the brand new session with the correct type
+      const startSessionQuery = `
+        INSERT INTO exercise_data (nfc_uid, exercise_type, status)
+        VALUES ($1, $2, 'active')
+      `;
+      await client.query(startSessionQuery, [nfc_uid, exerciseType]);
+    }
+
+    // 5. Get the count BEFORE committing (Safely inside the transaction sandbox)
+    let activeCount = 0;
+    if (access_granted) {
+      const countQuery = `SELECT COUNT(*) FROM exercise_data WHERE status = 'active'`;
+      const countResult = await client.query(countQuery);
+      activeCount = parseInt(countResult.rows[0].count, 10);
+    }
+
+    // 6. Commit the transaction to save ALL logs and the session permanently
     await client.query('COMMIT');
 
-    // 4. Send the final verdict back to the ESP32
+    // 7. Send the final verdict back to the ESP32 (Only happens if DB safely commits)
     if (access_granted) {
-      res.json({ authorized: true, name: responseName });
+      res.json({ authorized: true, name: responseName, active_count: activeCount });
     } else {
       res.json({ authorized: false, reason: denied_reason });
     }
@@ -82,8 +117,42 @@ router.post('/api/scan', async (req, res) => {
   } catch (error) {
     // If anything fails, rollback the transaction so we don't get partial data
     await client.query('ROLLBACK');
-    console.error("NFC Scan Error:", error);
     res.status(500).json({ authorized: false, reason: "Server Error" });
+  } finally {
+    client.release();
+  }
+});
+
+// --- AUTO-CHECKOUT ROUTE ---
+router.post('/api/checkout', async (req, res) => {
+  const { action } = req.body;
+
+  if (action !== 'checkout_all') {
+    return res.status(400).json({ status: "error", reason: "Invalid action" });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // Find any open workouts and close them by stamping the current time
+    const checkoutQuery = `
+      UPDATE exercise_data 
+      SET end_time = CURRENT_TIMESTAMP, status = 'completed' 
+      WHERE status = 'active'
+    `;
+    
+    // Execute and capture the result to know exactly how many sessions were closed
+    const result = await client.query(checkoutQuery);
+
+    await client.query('COMMIT');
+    
+    res.json({ status: "success", message: `Closed ${result.rowCount} sessions.` });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ status: "error", reason: "Server Error" });
   } finally {
     client.release();
   }
