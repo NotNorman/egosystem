@@ -27,7 +27,8 @@ router.post('/api/scan', async (req, res) => {
         s.current_period_end
       FROM card_data c
       JOIN user_data u ON c.user_id = u.id
-      LEFT JOIN subscriptions s ON u.id = s.user_id
+      -- The added rule is right here: "AND s.product_id = 1"
+      LEFT JOIN subscriptions s ON u.id = s.user_id AND s.product_id = 1
       WHERE c.nfc_uid = $1
       ORDER BY s.current_period_end DESC NULLS LAST
       LIMIT 1;
