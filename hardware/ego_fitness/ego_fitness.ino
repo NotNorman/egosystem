@@ -1,3 +1,11 @@
+#define DEBUG_MODE 1
+
+#if DEBUG_MODE
+  #define DEBUG_PRINT(x) Serial.println(x)
+#else
+  #define DEBUG_PRINT(x)
+#endif
+
 #include "TFT_eSPI.h"
 #include <Adafruit_PN532.h>
 #include <Wire.h>
@@ -38,8 +46,10 @@ HardwareSerial RadarSerial(0);
 #define PN532_IRQ   2
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RSTPDN_PIN);
 
-// --- BUZZER PIN ---
-#define BUZZER_PIN 10 // Replaced the MP3 UART with a simple buzzer pin
+// microphone for lunk alarm
+#define MIC_PIN 13 
+unsigned long lastLunkAlarmTime = 0;
+const unsigned long LUNK_COOLDOWN = 5000;
 
 const uint16_t EF_PURPLE = 0x480E;
 const uint16_t EF_GREEN  = 0x07E0; 
@@ -62,12 +72,6 @@ int currentPeopleCount = 0;
 int authorizedUsers = 0;    
 
 String lastUidStr = "";
-
-// --- DELIVERY RECEIPT CALLBACK ---
-void OnDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
-  Serial.print("Wireless Delivery Status: ");
-  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "SUCCESS (Receiver got it!)" : "FAILED (Receiver is offline)");
-}
 
 // --- NON-BLOCKING RADAR PARSER ---
 void updateRadar() {
@@ -147,6 +151,20 @@ void renderDisplay(String topText, String bottomText, int mode) {
 }
 
 JsonDocument sendApiRequest(String endpoint, String jsonPayload) {
+  // --- AUTO-RECONNECT LOGIC ---
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG_PRINT("Wi-Fi lost! Attempting to reconnect...");
+    WiFi.disconnect();
+    WiFi.reconnect();
+    
+    unsigned long startAttemptTime = millis();
+    // Wait up to 5 seconds to get a connection back
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 5000) {
+      delay(100);
+    }
+  }
+
+  // Proceed with the HTTP request
   HTTPClient http;
   http.begin(String(SECRET_API_SERVER_NODE) + endpoint);
   http.addHeader("Content-Type", "application/json");
@@ -176,9 +194,9 @@ void playSound(int type) {
   esp_err_t result = esp_now_send(FITNESS_ALARM_MAC, (uint8_t *) &msg, sizeof(msg));
   
   if (result == ESP_OK) {
-    Serial.println("Sent sound command: " + String(type));
+    DEBUG_PRINT("Sent sound command: " + String(type));
   } else {
-    Serial.println("Error sending sound command");
+    DEBUG_PRINT("Error sending sound command");
   }
 }
 
@@ -191,10 +209,6 @@ void setup() {
     delay(500);
   }
 
-  // Initialize Buzzer
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, LOW);
-
   RadarSerial.begin(256000, SERIAL_8N1, RADAR_RX_PIN, RADAR_TX_PIN);
   delay(100); 
 
@@ -203,10 +217,9 @@ void setup() {
 
   // Initialize ESP-NOW
   if (esp_now_init() != ESP_OK) {
-    Serial.println("Error initializing ESP-NOW");
+    DEBUG_PRINT("Error initializing ESP-NOW");
     return;
   }
-  esp_now_register_send_cb(OnDataSent);
 
   // Register the Receiver as a peer
   memcpy(peerInfo.peer_addr, FITNESS_ALARM_MAC, 6);
@@ -214,9 +227,11 @@ void setup() {
   peerInfo.encrypt = false;
   
   if (esp_now_add_peer(&peerInfo) != ESP_OK){
-    Serial.println("Failed to add peer");
+    DEBUG_PRINT("Failed to add peer");
     return;
   }
+
+  pinMode(MIC_PIN, INPUT);
 
   tft.init();
   tft.setRotation(0); 
@@ -231,6 +246,15 @@ void setup() {
 
 void loop() {
   updateRadar();
+
+  // --- LUNK ALARM ---
+  if (digitalRead(MIC_PIN) == HIGH) {
+    if (millis() - lastLunkAlarmTime > LUNK_COOLDOWN) {
+      DEBUG_PRINT("LOUD NOISE! Triggering Lunk Alarm.");
+      playSound(4); // Send the lunk alarm command wirelessly
+      lastLunkAlarmTime = millis();
+    }
+  }
 
   // --- SCREEN & AUTO-CHECKOUT LOGIC ---
   if (personDetected && !isScreenOn) {
@@ -258,15 +282,33 @@ void loop() {
     }
   }
 
-  // --- THE TAILGATING ALARM ---
-  if (personDetected && authorizedUsers > 0 && currentPeopleCount > authorizedUsers) {
-    static unsigned long lastAlarmTime = 0;
+  // --- THE INTRUDER & TAILGATING ALARM (Whole-Room Version) ---
+  static unsigned long intruderTimer = 0;
+  static bool intruderGraceActive = false;
+
+  // 1. If there are strictly more bodies in the room than tapped cards...
+  if (currentPeopleCount > authorizedUsers) {
     
-    if (millis() - lastAlarmTime > 2000) { 
-      Serial.println("TAILGATING DETECTED: More bodies than taps!");
-      playSound(2); // Play siren tone
-      lastAlarmTime = millis();
+    // 2. Start the 5-second grace period clock the second the extra body appears
+    if (!intruderGraceActive) {
+      intruderTimer = millis();
+      intruderGraceActive = true;
     }
+
+    // 3. If the extra person hasn't tapped within 5 seconds, blast them
+    if (millis() - intruderTimer > 5000) {
+      static unsigned long lastAlarmTime = 0;
+      
+      // Blast the alarm every 3 seconds until they tap or leave
+      if (millis() - lastAlarmTime > 3000) { 
+        DEBUG_PRINT("UNAUTHORIZED PERSON DETECTED!");
+        playSound(5); 
+        lastAlarmTime = millis();
+      }
+    }
+  } else {
+    // 4. Everyone is authorized (or the room is empty). Reset the trap.
+    intruderGraceActive = false; 
   }
 
   // --- NFC SCAN & DYNAMIC SCREEN LOGIC ---
@@ -321,7 +363,7 @@ void loop() {
           // Instead of authorizedUsers++, we read the exact count from the server
           authorizedUsers = doc["active_count"] | (authorizedUsers + 1); 
           
-          Serial.println("Authorized! Current allowed users: " + String(authorizedUsers));
+          DEBUG_PRINT("Authorized! Current allowed users: " + String(authorizedUsers));
           playSound(3); // Happy beep!
           renderDisplay("WELCOME!", userName, 1);
         } else {
