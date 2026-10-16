@@ -6,13 +6,25 @@
 #include <arduino_secrets.h>
 #include <ArduinoJson.h>
 #include <Arduino.h>
+#include <esp_now.h> 
 
 #include "logo.h"
 #include "Rockwell20.h"
 #include "Rockwell30.h"
 
+// audio data structure
+typedef struct audio_message {
+  int sound_type;
+} audio_message;
+
+esp_now_peer_info_t peerInfo;
+
 TFT_eSPI tft = TFT_eSPI(); 
 
+// Device Name (for use in API calls)
+#define DEVICE_ID "Ego Fitness Check-in"
+
+// Screen Backlight pin
 #define TFT_BL_PIN 7 
 
 // --- RADAR PINS & SERIAL ---
@@ -22,9 +34,9 @@ HardwareSerial RadarSerial(0);
 
 #define SDA_PIN 4
 #define SCL_PIN 5
+#define PN532_RSTPDN_PIN 3
 #define PN532_IRQ   2
-#define PN532_RESET 3
-Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
+Adafruit_PN532 nfc(PN532_IRQ, PN532_RSTPDN_PIN);
 
 // --- BUZZER PIN ---
 #define BUZZER_PIN 10 // Replaced the MP3 UART with a simple buzzer pin
@@ -50,6 +62,12 @@ int currentPeopleCount = 0;
 int authorizedUsers = 0;    
 
 String lastUidStr = "";
+
+// --- DELIVERY RECEIPT CALLBACK ---
+void OnDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  Serial.print("Wireless Delivery Status: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "SUCCESS (Receiver got it!)" : "FAILED (Receiver is offline)");
+}
 
 // --- NON-BLOCKING RADAR PARSER ---
 void updateRadar() {
@@ -150,23 +168,17 @@ JsonDocument sendApiRequest(String endpoint, String jsonPayload) {
   return doc;
 }
 
-// --- SIMPLE BUZZER NOTIFICATIONS ---
 void playSound(int type) {
-  if (type == 1) { 
-    // DENIED: Low, ugly buzz
-    tone(BUZZER_PIN, 150, 400); 
-  } 
-  else if (type == 2) { 
-    // ALARM: High-Low siren
-    tone(BUZZER_PIN, 1200, 200);
-    delay(200); // Small blocking delay is okay for an active alarm state
-    tone(BUZZER_PIN, 800, 200);
-  }
-  else if (type == 3) {
-    // SUCCESS: Happy double-chirp
-    tone(BUZZER_PIN, 1200, 100);
-    delay(120);
-    tone(BUZZER_PIN, 1600, 150);
+  audio_message msg;
+  msg.sound_type = type;
+  
+  // Broadcast the integer to the receiver ESP32
+  esp_err_t result = esp_now_send(FITNESS_ALARM_MAC, (uint8_t *) &msg, sizeof(msg));
+  
+  if (result == ESP_OK) {
+    Serial.println("Sent sound command: " + String(type));
+  } else {
+    Serial.println("Error sending sound command");
   }
 }
 
@@ -189,12 +201,31 @@ void setup() {
   pinMode(TFT_BL_PIN, OUTPUT);
   digitalWrite(TFT_BL_PIN, LOW); 
 
+  // Initialize ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+  esp_now_register_send_cb(OnDataSent);
+
+  // Register the Receiver as a peer
+  memcpy(peerInfo.peer_addr, FITNESS_ALARM_MAC, 6);
+  peerInfo.channel = 0;  
+  peerInfo.encrypt = false;
+  
+  if (esp_now_add_peer(&peerInfo) != ESP_OK){
+    Serial.println("Failed to add peer");
+    return;
+  }
+
   tft.init();
   tft.setRotation(0); 
 
   renderDisplay("Ego Fitness", "TAP TO SIGN IN", 0);
 
   Wire.begin(SDA_PIN, SCL_PIN);
+  pinMode(PN532_RSTPDN_PIN, OUTPUT);
+  digitalWrite(PN532_RSTPDN_PIN, HIGH);
   nfc.begin();
 }
 
@@ -204,16 +235,23 @@ void loop() {
   // --- SCREEN & AUTO-CHECKOUT LOGIC ---
   if (personDetected && !isScreenOn) {
     digitalWrite(TFT_BL_PIN, HIGH);
+
+    // 1. Wake up the NFC reader
+    digitalWrite(PN532_RSTPDN_PIN, HIGH);
+    delay(50);   // Brief pause to let the PN532 chip boot up
+    nfc.begin(); // Re-initialize the I2C connection and settings
+
     isScreenOn = true;
   } 
   else if (!personDetected && isScreenOn) {
     digitalWrite(TFT_BL_PIN, LOW);
+    // 2. Put the NFC reader into deep sleep
+    digitalWrite(PN532_RSTPDN_PIN, LOW);
     isScreenOn = false;
     
     // THE RESET & AUTO-CHECKOUT
     if (authorizedUsers > 0) {
-      Serial.println("Room empty. Sending auto-checkout request...");
-      String jsonPayload = "{\"device_id\":\"Ego Fitness Check-in\", \"action\":\"checkout_all\"}";
+      String jsonPayload = "{\"device_id\":\"" + String(DEVICE_ID) + "\", \"action\":\"checkout_all\"}";
       sendApiRequest("/api/checkout", jsonPayload);
       
       authorizedUsers = 0; 
@@ -260,7 +298,7 @@ void loop() {
 
         lastUidStr = nfcUidStr;
 
-        String jsonPayload = "{\"nfc_uid\":\"" + nfcUidStr + "\", \"device_id\":\"Ego Fitness Check-in\"}";
+        String jsonPayload = "{\"nfc_uid\":\"" + nfcUidStr + "\", \"device_id\":\"" + String(DEVICE_ID) + "\"}";
         JsonDocument doc = sendApiRequest("/api/scan", jsonPayload);
 
         bool isAuthorized = false;
@@ -280,7 +318,9 @@ void loop() {
         }
 
         if (isAuthorized) {
-          authorizedUsers++; 
+          // Instead of authorizedUsers++, we read the exact count from the server
+          authorizedUsers = doc["active_count"] | (authorizedUsers + 1); 
+          
           Serial.println("Authorized! Current allowed users: " + String(authorizedUsers));
           playSound(3); // Happy beep!
           renderDisplay("WELCOME!", userName, 1);
