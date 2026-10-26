@@ -5,7 +5,7 @@ const EgoPortal = () => {
   const services = [
     {
       title: "Ego Fitness",
-      description: "Track workouts, manage NFC gym access, and see leaderboard rankings.",
+      description: "Track workouts, manage gym membership, and see leaderboard rankings.",
       href: "/fitness",
       buttonText: "Enter Fitness",
       titleColor: "text-purple-600 dark:text-purple-400",
@@ -37,8 +37,11 @@ const EgoPortal = () => {
 
       {/* Header Section */}
       <div className="text-center mb-12">
-        <h1 className="text-5xl font-extrabold tracking-tight mb-4">
-          Ego <span className="text-muted-foreground">Hub</span>
+        <h1 className="text-5xl font-extrabold tracking-tight mb-4 flex items-center justify-center">
+          <span>Ego</span>
+          <span className="ml-0.5 px-2.5 pt-1 pb-1.5 rounded-lg bg-zinc-800 text-white dark:bg-white dark:text-zinc-800 leading-none inline-block">
+            Hub
+          </span>
         </h1>
         <p className="text-lg text-muted-foreground">
           Select a service to enter your dashboard.

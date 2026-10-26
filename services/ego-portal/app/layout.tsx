@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react"; // 1. Import Suspense
 import { Geist, Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
@@ -26,7 +27,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-full flex flex-col">
         <ThemeProvider attribute="class" enableSystem defaultTheme="system" >
-            <Navbar />
+            <Suspense fallback={<div className="h-14 w-full border-b border-border bg-background" />}>
+              <Navbar />
+            </Suspense>
             {children}
         </ThemeProvider>
       </body>
