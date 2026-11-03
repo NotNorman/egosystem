@@ -13,22 +13,22 @@ const EgoPortal = () => {
       disabled: false,
     },
     {
-      title: "Ego Banking",
+      title: "Bank of Ego",
       description: "Check balance, transfers, and deposit requests.",
-      href: "/banking",
-      buttonText: "Coming Soon",
+      href: "/bank",
+      buttonText: "Enter Banking",
       titleColor: "text-emerald-600 dark:text-emerald-400",
-      buttonColor: "bg-zinc-200 dark:bg-zinc-800 text-zinc-500",
-      disabled: true,
+      buttonColor: "bg-emerald-600 hover:bg-emerald-700",
+      disabled: false,
     },
     {
       title: "Ego Gaming",
       description: "Lotto, raffles, and community leaderboards.",
       href: "/gaming",
-      buttonText: "Coming Soon",
+      buttonText: "Enter Gaming",
       titleColor: "text-rose-600 dark:text-rose-400",
-      buttonColor: "bg-zinc-200 dark:bg-zinc-800 text-zinc-500",
-      disabled: true,
+      buttonColor: "bg-rose-600 hover:bg-rose-700",
+      disabled: false,
     }
   ];
 

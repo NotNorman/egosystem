@@ -130,7 +130,7 @@ export const HubMenu = ({ categories }: HubMenuProps) => {
                 <Menu className="w-5 h-5 pointer-events-none" />
             </summary>
             
-            <div className="fixed top-14 left-0 w-full max-h-[calc(100vh-3.5rem)] overflow-y-auto bg-background border-b border-border shadow-2xl z-100 cursor-default">
+            <div className="absolute top-14 left-0 w-full max-h-[calc(100vh-3.5rem)] overflow-y-auto bg-background border-b border-border shadow-2xl z-100 cursor-default">
                 <div className="w-full max-w-7xl mx-auto p-5 md:p-8 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 md:gap-8">
                     {menuToRender.map((section, index) => (
                         <div key={index} className="flex flex-col">

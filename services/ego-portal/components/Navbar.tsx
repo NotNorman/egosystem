@@ -36,7 +36,7 @@ const HUB_CATEGORIES: ServiceCategory[] = [
         // 2. What columns show in the hamburger menu when INSIDE "/fitness..."
         subMenu: [
             {
-                title: "Overview",
+                title: "Home",
                 titleColor: "text-purple-600 dark:text-purple-500",
                 href: "/fitness",
                 services: [
@@ -71,27 +71,29 @@ const HUB_CATEGORIES: ServiceCategory[] = [
         href: "/bank",
         // What shows on the main Hub ("/")
         services: [
-            { name: "Overview", href: "/bank" },
-            { name: "Top Up Balance", href: "/bank/top-up" },
+            { name: "Home", href: "/bank" },
+            { name: "Online Banking", href: "/bank/portal" },
         ],
         // What columns show when INSIDE "/bank..."
         subMenu: [
             {
-                title: "Overview",
+                title: "Home",
                 titleColor: "text-emerald-600 dark:text-emerald-500",
                 href: "/bank",
                 services: [
-                    { name: "Account Summary", href: "/bank" },
-                    { name: "Recent Activity", href: "/bank/activity" },
+                    { name: "About Us", href: "/bank" },
+                    { name: "somebs", href: "/bank" },
                 ],
             },
             {
-                title: "Funds & Transfers",
+                title: "Online Banking",
                 titleColor: "text-emerald-600 dark:text-emerald-500",
-                href: "/bank/top-up",
+                href: "/bank/portal",
                 services: [
-                    { name: "Top Up Balance", href: "/bank/top-up" },
-                    { name: "Send Credits", href: "/bank/transfer" },
+                    { name: "Account Overview", href: "/bank/portal?tab=overview" },
+                    { name: "Deposit", href: "/bank/portal?tab=deposit" },
+                    { name: "Memberships", href: "/bank/portal?tab=memberships" },
+                    { name: "Transaction History", href: "/bank/portal?tab=transactions" },
                 ],
             },
         ],
@@ -150,7 +152,7 @@ const Navbar = async () => {
         : `/login?callbackUrl=${encodeURIComponent(topUpPath)}`;
 
     return (
-        <div className="sticky top-0 w-full h-14 px-3 sm:px-6 grid grid-cols-2 md:grid-cols-3 items-center gap-2 z-50 bg-background border-b border-border transition-colors">
+        <div className="relative w-full h-14 px-3 sm:px-6 grid grid-cols-2 md:grid-cols-3 items-center gap-2 z-50 bg-background border-b border-border transition-colors">
             
             {/* Column 1: Left Side */}
             <div className="flex justify-start items-center gap-1 sm:gap-2 shrink-0">
