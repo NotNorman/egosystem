@@ -193,13 +193,39 @@ export const HubBadge = () => {
 // 5. User Dropdown Menu for Logged-in Users
 export const UserMenu = ({ username }: { username: string }) => {
     const detailsRef = useRef<HTMLDetailsElement>(null);
-    const pathname = usePathname(); // 2. Get the current page URL path
+    const pathname = usePathname();
 
     const handleClose = () => {
         if (detailsRef.current) {
             detailsRef.current.removeAttribute("open");
         }
     };
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (
+                detailsRef.current &&
+                detailsRef.current.hasAttribute("open") &&
+                !detailsRef.current.contains(event.target as Node)
+            ) {
+                handleClose();
+            }
+        };
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                handleClose();
+            }
+        };
+
+        document.addEventListener("mousedown", handleClickOutside);
+        document.addEventListener("keydown", handleKeyDown);
+
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+            document.removeEventListener("keydown", handleKeyDown);
+        };
+    }, []);
 
     const handleSignOut = async () => {
         handleClose();

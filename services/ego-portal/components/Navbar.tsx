@@ -146,7 +146,7 @@ const Navbar = async () => {
         }
     }
 
-    const topUpPath = "/bank/top-up";
+    const topUpPath = "/bank/portal?tab=deposit";
     const addBalanceHref = currentUser 
         ? topUpPath 
         : `/login?callbackUrl=${encodeURIComponent(topUpPath)}`;
