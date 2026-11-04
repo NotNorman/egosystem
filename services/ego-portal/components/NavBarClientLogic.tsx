@@ -32,6 +32,18 @@ interface ServiceCategoryForTitle {
     href: string;
 }
 
+
+// 1. Unified Visibility Wrapper (Replaces HideOnHome)
+export const NavbarVisibility = ({ children }: { children: React.ReactNode }) => {
+    const pathname = usePathname();
+    
+    // Hide the navbar entirely on the Home page AND anywhere inside /gaming
+    if (pathname === "/" || pathname?.startsWith("/gaming")) {
+        return null; 
+    }
+    
+    return <>{children}</>;
+};
 // 1. Hide Left Side Menu on Home Page
 export const HideOnHome = ({ children }: { children: React.ReactNode }) => {
     const pathname = usePathname();
